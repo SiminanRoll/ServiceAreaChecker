@@ -67,6 +67,28 @@
         <div><span class="swatch selected"></span><span>Matched County Highlight</span></div>
       </section>
 
+      <section class="data-card" aria-label="Map data import and export tools">
+        <details>
+          <summary>
+            <span>Map data</span>
+            <small>Import / Export</small>
+          </summary>
+          <div class="data-actions">
+            <button id="export-geojson" type="button">Export GeoJSON</button>
+            <label class="file-button" for="import-geojson">Import GeoJSON</label>
+            <input id="import-geojson" type="file" accept=".geojson,.json,application/geo+json,application/json" />
+            <label class="file-button" for="import-primary-csv">Import Primary CSV</label>
+            <input id="import-primary-csv" type="file" accept=".csv,text/csv" />
+            <label class="file-button" for="import-extended-csv">Import Extended CSV</label>
+            <input id="import-extended-csv" type="file" accept=".csv,text/csv" />
+            <button id="export-primary-csv" type="button">Export Primary CSV</button>
+            <button id="export-extended-csv" type="button">Export Extended CSV</button>
+            <button id="restore-default-data" type="button">Restore Published Data</button>
+          </div>
+          <p id="data-status" class="data-status">Using published 2023 map data.</p>
+        </details>
+      </section>
+
       <p class="footnote">Coverage result is based on imported 2023 county service-area data.</p>
     </section>
 
@@ -85,6 +107,6 @@
   <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
   <script src="app.js"></script>
   <!-- Replace YOUR_GOOGLE_MAPS_API_KEY with your browser-restricted Google Maps key. Places is needed for possible matches/autocomplete. -->
-  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBVSNKe8p1Ac-OsbsOdqYfaAlWqB_nVRCI&callback=initMap&libraries=places&v=weekly" defer></script>
+  <script src="https://maps.googleapis.com/maps/api/js?key=YOUR_GOOGLE_MAPS_API_KEY&callback=initMap&libraries=places&v=weekly" defer></script>
 </body>
 </html>

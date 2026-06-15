@@ -90,7 +90,7 @@ body {
 h1 { margin: 0; font-size: clamp(26px, 4vw, 38px); line-height: .98; letter-spacing: -0.052em; }
 .subhead { margin: 12px 0 0; color: var(--muted); line-height: 1.5; font-size: 14px; }
 
-.lookup-card, .result-card, .legend, .quick-actions {
+.lookup-card, .result-card, .legend, .quick-actions, .data-card {
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   background: rgba(15, 23, 42, 0.56);
@@ -155,6 +155,22 @@ button:disabled { opacity: .56; cursor: not-allowed; }
 .swatch.extended { background:#94a3b8; }
 .swatch.selected { background:var(--selected); }
 .footnote { margin-top:auto; }
+
+
+.data-card { padding: 12px 14px; }
+.data-card details { margin: 0; }
+.data-card summary { list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; color: var(--soft); font-size: 13px; font-weight: 900; }
+.data-card summary::-webkit-details-marker { display: none; }
+.data-card summary small { color: #93c5fd; font-size: 11px; text-transform: uppercase; letter-spacing: .09em; }
+.data-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 12px; }
+.data-actions input[type="file"] { display: none; }
+.data-actions button, .file-button { min-height: 40px; border-radius: 14px; display: grid; place-items: center; text-align: center; color: var(--soft); background: rgba(15,23,42,.72); border: 1px solid rgba(148,163,184,.18); font-size: 12px; font-weight: 900; cursor: pointer; padding: 0 10px; }
+.data-actions button:hover, .file-button:hover { background: rgba(30,41,59,.86); color: white; }
+#restore-default-data { grid-column: 1 / -1; color: #fecdd3; border-color: rgba(251,113,133,.22); }
+.data-status { margin: 10px 2px 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.data-status.good { color: #bbf7d0; }
+.data-status.warn { color: #fde68a; }
+.data-status.bad { color: #fecdd3; }
 
 .map-card { position:relative; border-radius:var(--radius-lg); overflow:hidden; min-width:0; }
 .map-toolbar { position:absolute; top:18px; left:18px; right:18px; z-index:5; display:flex; align-items:center; justify-content:space-between; gap:14px; padding:14px 16px; border-radius:20px; border:1px solid rgba(148,163,184,.18); background:rgba(7,12,24,.76); box-shadow:0 18px 48px rgba(0,0,0,.32); backdrop-filter:blur(18px); -webkit-backdrop-filter:blur(18px); pointer-events:none; }

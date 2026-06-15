@@ -5,7 +5,9 @@ let autocompleteService;
 let marker;
 let infoWindow;
 let serviceAreas;
+let publishedServiceAreas;
 let coverageBounds;
+let geometryLibrary = new Map();
 let matchedCountyName = null;
 let matchedLayer = null;
 let suggestionPredictions = [];
@@ -14,6 +16,8 @@ let suggestionsTimer = null;
 
 const INITIAL_CENTER = { lat: 36.7, lng: -84.8 };
 const INITIAL_ZOOM = 5;
+const DEFAULT_DATA_URL = "service_areas.geojson";
+const LOCAL_DATA_KEY = "advantage_service_area_geojson_override_v1";
 
 const DARK_MAP_STYLE = [
   { elementType: "geometry", stylers: [{ color: "#0f172a" }] },
@@ -52,11 +56,9 @@ window.initMap = async function initMap() {
   placesService = new google.maps.places.PlacesService(map);
   autocompleteService = new google.maps.places.AutocompleteService();
 
-  serviceAreas = await fetch("service_areas.geojson").then((response) => response.json());
-  map.data.addGeoJson(serviceAreas);
-  map.data.setStyle(styleFeature);
-  coverageBounds = buildGeoJsonBounds(serviceAreas);
-  fitCoverageBounds();
+  publishedServiceAreas = await fetch(DEFAULT_DATA_URL).then((response) => response.json());
+  const savedServiceAreas = loadSavedServiceAreas();
+  setServiceAreaData(savedServiceAreas || publishedServiceAreas, savedServiceAreas ? "Saved browser import" : "Published 2023 map data", false);
 
   map.data.addListener("click", (event) => {
     const name = event.feature.getProperty("name");
@@ -125,6 +127,7 @@ function wireLookupControls() {
 
   document.getElementById("reset-map").addEventListener("click", fitCoverageBounds);
   document.getElementById("clear-search").addEventListener("click", () => clearLookup(true));
+  wireDataControls();
 }
 
 function loadSuggestions(inputValue) {
@@ -214,6 +217,260 @@ function selectSuggestion(prediction) {
       evaluateLocation(place.geometry.location, place.formatted_address || place.name || prediction.description);
     }
   );
+}
+
+
+function wireDataControls() {
+  document.getElementById("export-geojson")?.addEventListener("click", exportGeoJson);
+  document.getElementById("export-primary-csv")?.addEventListener("click", () => exportCoverageCsv("Primary Service Area"));
+  document.getElementById("export-extended-csv")?.addEventListener("click", () => exportCoverageCsv("Extended Service Area"));
+  document.getElementById("restore-default-data")?.addEventListener("click", () => {
+    localStorage.removeItem(LOCAL_DATA_KEY);
+    setServiceAreaData(publishedServiceAreas, "Published 2023 map data restored", true);
+    setDataStatus("Published data restored. Commit a replacement service_areas.geojson to GitHub if you want changes shared with everyone.", "good");
+  });
+
+  document.getElementById("import-geojson")?.addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      const imported = JSON.parse(await file.text());
+      validateServiceAreaGeoJson(imported);
+      localStorage.setItem(LOCAL_DATA_KEY, JSON.stringify(imported));
+      setServiceAreaData(imported, `Imported GeoJSON: ${file.name}`, true);
+      setDataStatus(`Imported ${file.name}. This browser is updated now. Export GeoJSON and replace service_areas.geojson in GitHub to update the team site.`, "good");
+    } catch (error) {
+      setDataStatus(`Import failed: ${error.message}`, "bad");
+    } finally {
+      event.target.value = "";
+    }
+  });
+
+  document.getElementById("import-primary-csv")?.addEventListener("change", (event) => importCoverageCsv(event, "Primary Service Area"));
+  document.getElementById("import-extended-csv")?.addEventListener("change", (event) => importCoverageCsv(event, "Extended Service Area"));
+}
+
+function loadSavedServiceAreas() {
+  try {
+    const saved = localStorage.getItem(LOCAL_DATA_KEY);
+    if (!saved) return null;
+    const parsed = JSON.parse(saved);
+    validateServiceAreaGeoJson(parsed);
+    return parsed;
+  } catch (_error) {
+    localStorage.removeItem(LOCAL_DATA_KEY);
+    return null;
+  }
+}
+
+function setServiceAreaData(geojson, sourceLabel, shouldClearLookup) {
+  validateServiceAreaGeoJson(geojson);
+  serviceAreas = cloneJson(geojson);
+  rebuildGeometryLibrary(serviceAreas);
+
+  map.data.forEach((feature) => map.data.remove(feature));
+  map.data.addGeoJson(serviceAreas);
+  map.data.setStyle(styleFeature);
+  coverageBounds = buildGeoJsonBounds(serviceAreas);
+
+  if (shouldClearLookup) clearLookup(true);
+  else fitCoverageBounds();
+
+  updateDataSummary(sourceLabel);
+}
+
+function validateServiceAreaGeoJson(geojson) {
+  if (!geojson || geojson.type !== "FeatureCollection" || !Array.isArray(geojson.features)) {
+    throw new Error("File must be a GeoJSON FeatureCollection.");
+  }
+
+  const badFeature = geojson.features.find((feature) => !feature.geometry || !feature.properties?.name || !feature.properties?.service_area);
+  if (badFeature) {
+    throw new Error("Each feature needs geometry, properties.name, and properties.service_area.");
+  }
+}
+
+function rebuildGeometryLibrary(geojson) {
+  geometryLibrary = new Map();
+  geojson.features.forEach((feature) => {
+    geometryLibrary.set(normalizeCountyName(feature.properties.name), cloneJson(feature));
+  });
+}
+
+async function importCoverageCsv(event, layerName) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+
+  try {
+    const names = parseCountyNamesFromCsv(await file.text());
+    if (!names.length) throw new Error("No county names found. Expected a CSV with a Name column like `FL - Hillsborough County`.");
+
+    const current = getCurrentCoverageSets();
+    const incomingSet = new Set(names.map(normalizeCountyName));
+    const primarySet = layerName === "Primary Service Area" ? incomingSet : current.primary;
+    const extendedSet = layerName === "Extended Service Area" ? incomingSet : current.extended;
+
+    // Primary wins if a county appears in both lists.
+    primarySet.forEach((name) => extendedSet.delete(name));
+
+    const { geojson, missingPrimary, missingExtended } = rebuildFromCountySets(primarySet, extendedSet);
+    localStorage.setItem(LOCAL_DATA_KEY, JSON.stringify(geojson));
+    setServiceAreaData(geojson, `Imported ${layerName} CSV: ${file.name}`, true);
+
+    const missing = [...missingPrimary, ...missingExtended];
+    if (missing.length) {
+      setDataStatus(`Imported ${file.name}, but ${missing.length} counties were not already in this map geometry and could not be added. Export GeoJSON after review.`, "warn");
+    } else {
+      setDataStatus(`Imported ${file.name}. Export GeoJSON and replace service_areas.geojson in GitHub to update the team site.`, "good");
+    }
+  } catch (error) {
+    setDataStatus(`CSV import failed: ${error.message}`, "bad");
+  } finally {
+    event.target.value = "";
+  }
+}
+
+function rebuildFromCountySets(primarySet, extendedSet) {
+  const features = [];
+  const missingPrimary = [];
+  const missingExtended = [];
+
+  primarySet.forEach((name) => {
+    const feature = geometryLibrary.get(name);
+    if (!feature) { missingPrimary.push(name); return; }
+    const copy = cloneJson(feature);
+    copy.properties.service_area = "Primary Service Area";
+    copy.properties.priority = 1;
+    features.push(copy);
+  });
+
+  extendedSet.forEach((name) => {
+    const feature = geometryLibrary.get(name);
+    if (!feature) { missingExtended.push(name); return; }
+    const copy = cloneJson(feature);
+    copy.properties.service_area = "Extended Service Area";
+    copy.properties.priority = 2;
+    features.push(copy);
+  });
+
+  return { geojson: { type: "FeatureCollection", features }, missingPrimary, missingExtended };
+}
+
+function getCurrentCoverageSets() {
+  const primary = new Set();
+  const extended = new Set();
+  serviceAreas.features.forEach((feature) => {
+    const key = normalizeCountyName(feature.properties.name);
+    if (feature.properties.service_area === "Primary Service Area") primary.add(key);
+    if (feature.properties.service_area === "Extended Service Area") extended.add(key);
+  });
+  return { primary, extended };
+}
+
+function parseCountyNamesFromCsv(text) {
+  const rows = parseCsv(text.replace(/^\uFEFF/, ""));
+  if (!rows.length) return [];
+
+  const header = rows[0].map((value) => value.trim().toLowerCase());
+  const nameIndex = header.findIndex((value) => ["name", "county", "county name"].includes(value));
+  const startIndex = nameIndex >= 0 ? 1 : 0;
+  const columnIndex = nameIndex >= 0 ? nameIndex : 0;
+
+  return rows.slice(startIndex)
+    .map((row) => (row[columnIndex] || "").trim())
+    .filter(Boolean);
+}
+
+function parseCsv(text) {
+  const rows = [];
+  let row = [];
+  let value = "";
+  let inQuotes = false;
+
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index];
+    const next = text[index + 1];
+
+    if (char === '"') {
+      if (inQuotes && next === '"') { value += '"'; index++; }
+      else inQuotes = !inQuotes;
+      continue;
+    }
+
+    if (char === "," && !inQuotes) { row.push(value); value = ""; continue; }
+    if ((char === "\n" || char === "\r") && !inQuotes) {
+      if (char === "\r" && next === "\n") index++;
+      row.push(value);
+      if (row.some((cell) => cell.trim())) rows.push(row);
+      row = [];
+      value = "";
+      continue;
+    }
+
+    value += char;
+  }
+
+  row.push(value);
+  if (row.some((cell) => cell.trim())) rows.push(row);
+  return rows;
+}
+
+function exportGeoJson() {
+  downloadTextFile("service_areas.geojson", JSON.stringify(serviceAreas, null, 2), "application/geo+json");
+  setDataStatus("Exported service_areas.geojson. Replace the file in GitHub to publish this map for the full team.", "good");
+}
+
+function exportCoverageCsv(layerName) {
+  const rows = serviceAreas.features
+    .filter((feature) => feature.properties.service_area === layerName)
+    .map((feature) => feature.properties.name)
+    .sort((a, b) => a.localeCompare(b));
+
+  const fileName = layerName === "Primary Service Area" ? "Primary Service Area.csv" : "Extended Service Area.csv";
+  const csv = ["Name", ...rows.map(csvEscape)].join("\n");
+  downloadTextFile(fileName, csv, "text/csv");
+}
+
+function updateDataSummary(sourceLabel) {
+  const primaryCount = serviceAreas.features.filter((feature) => feature.properties.service_area === "Primary Service Area").length;
+  const extendedCount = serviceAreas.features.filter((feature) => feature.properties.service_area === "Extended Service Area").length;
+  setDataStatus(`${sourceLabel}. ${primaryCount} Primary counties, ${extendedCount} Extended counties.`, "");
+}
+
+function setDataStatus(message, tone = "") {
+  const status = document.getElementById("data-status");
+  if (!status) return;
+  status.textContent = message;
+  status.className = `data-status ${tone}`.trim();
+}
+
+function downloadTextFile(fileName, content, mimeType) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function normalizeCountyName(value) {
+  return String(value || "")
+    .replace(/^\uFEFF/, "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function csvEscape(value) {
+  const text = String(value || "");
+  return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
 function styleFeature(feature) {
