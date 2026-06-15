@@ -5,10 +5,7 @@ let autocompleteService;
 let marker;
 let infoWindow;
 let serviceAreas;
-let publishedServiceAreas;
 let coverageBounds;
-let geometryLibrary = new Map();
-let countyCatalogLibrary = new Map();
 let matchedCountyName = null;
 let matchedLayer = null;
 let suggestionPredictions = [];
@@ -17,10 +14,6 @@ let suggestionsTimer = null;
 
 const INITIAL_CENTER = { lat: 36.7, lng: -84.8 };
 const INITIAL_ZOOM = 5;
-const DEFAULT_DATA_URL = "service_areas.geojson";
-const DEFAULT_PRIMARY_CSV_URL = "primary_service_area.csv";
-const DEFAULT_EXTENDED_CSV_URL = "extended_service_area.csv";
-const LOCAL_DATA_KEY = "advantage_service_area_geojson_override_v1";
 
 const DARK_MAP_STYLE = [
   { elementType: "geometry", stylers: [{ color: "#0f172a" }] },
@@ -59,13 +52,11 @@ window.initMap = async function initMap() {
   placesService = new google.maps.places.PlacesService(map);
   autocompleteService = new google.maps.places.AutocompleteService();
 
-  const baseServiceAreas = await fetch(DEFAULT_DATA_URL).then((response) => response.json());
-  validateServiceAreaGeoJson(baseServiceAreas);
-  countyCatalogLibrary = buildFeatureLibrary(baseServiceAreas);
-  publishedServiceAreas = await buildPublishedServiceAreas(baseServiceAreas);
-
-  const savedServiceAreas = loadSavedServiceAreas();
-  setServiceAreaData(savedServiceAreas || publishedServiceAreas, savedServiceAreas ? "Saved browser CSV import" : "Published CSV map data", false);
+  serviceAreas = await fetch("service_areas.geojson").then((response) => response.json());
+  map.data.addGeoJson(serviceAreas);
+  map.data.setStyle(styleFeature);
+  coverageBounds = buildGeoJsonBounds(serviceAreas);
+  fitCoverageBounds();
 
   map.data.addListener("click", (event) => {
     const name = event.feature.getProperty("name");
@@ -134,7 +125,6 @@ function wireLookupControls() {
 
   document.getElementById("reset-map").addEventListener("click", fitCoverageBounds);
   document.getElementById("clear-search").addEventListener("click", () => clearLookup(true));
-  wireDataControls();
 }
 
 function loadSuggestions(inputValue) {
@@ -224,319 +214,6 @@ function selectSuggestion(prediction) {
       evaluateLocation(place.geometry.location, place.formatted_address || place.name || prediction.description);
     }
   );
-}
-
-
-function wireDataControls() {
-  document.getElementById("open-import-modal")?.addEventListener("click", () => openModal("import-modal"));
-  document.getElementById("open-export-modal")?.addEventListener("click", () => openModal("export-modal"));
-  document.querySelectorAll("[data-close-modal]").forEach((button) => button.addEventListener("click", closeModals));
-  document.getElementById("modal-backdrop")?.addEventListener("click", closeModals);
-
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closeModals();
-  });
-
-  document.getElementById("export-primary-csv")?.addEventListener("click", () => exportCoverageCsv("Primary Service Area"));
-  document.getElementById("export-extended-csv")?.addEventListener("click", () => exportCoverageCsv("Extended Service Area"));
-
-  document.getElementById("restore-default-data")?.addEventListener("click", () => {
-    localStorage.removeItem(LOCAL_DATA_KEY);
-    clearImportFileInputs();
-    setServiceAreaData(publishedServiceAreas, "Published CSV map data restored", true);
-    setDataStatus("Published CSV data restored for this browser.", "good");
-    closeModals();
-  });
-
-  document.getElementById("import-primary-csv")?.addEventListener("change", () => updateSelectedFileName("import-primary-csv", "primary-file-name"));
-  document.getElementById("import-extended-csv")?.addEventListener("change", () => updateSelectedFileName("import-extended-csv", "extended-file-name"));
-  document.getElementById("apply-csv-import")?.addEventListener("click", applyCsvImportFromModal);
-}
-
-function openModal(id) {
-  document.getElementById("modal-backdrop").hidden = false;
-  document.getElementById(id).hidden = false;
-}
-
-function closeModals() {
-  const backdrop = document.getElementById("modal-backdrop");
-  if (backdrop) backdrop.hidden = true;
-  document.querySelectorAll(".modal-sheet").forEach((modal) => { modal.hidden = true; });
-}
-
-function updateSelectedFileName(inputId, labelId) {
-  const file = document.getElementById(inputId)?.files?.[0];
-  const label = document.getElementById(labelId);
-  if (label) label.textContent = file ? file.name : "No file selected";
-}
-
-function clearImportFileInputs() {
-  const primaryInput = document.getElementById("import-primary-csv");
-  const extendedInput = document.getElementById("import-extended-csv");
-  if (primaryInput) primaryInput.value = "";
-  if (extendedInput) extendedInput.value = "";
-  updateSelectedFileName("import-primary-csv", "primary-file-name");
-  updateSelectedFileName("import-extended-csv", "extended-file-name");
-}
-
-async function applyCsvImportFromModal() {
-  const primaryFile = document.getElementById("import-primary-csv")?.files?.[0];
-  const extendedFile = document.getElementById("import-extended-csv")?.files?.[0];
-
-  if (!primaryFile && !extendedFile) {
-    setDataStatus("Choose at least one CSV to preview an import.", "warn");
-    return;
-  }
-
-  try {
-    const current = getCurrentCoverageSets();
-    const primaryNames = primaryFile ? parseCountyNamesFromCsv(await primaryFile.text()) : [...current.primary];
-    const extendedNames = extendedFile ? parseCountyNamesFromCsv(await extendedFile.text()) : [...current.extended];
-
-    if (primaryFile && !primaryNames.length) throw new Error("Primary CSV did not include any county names.");
-    if (extendedFile && !extendedNames.length) throw new Error("Extended CSV did not include any county names.");
-
-    const primarySet = new Set(primaryNames.map(normalizeCountyName));
-    const extendedSet = new Set(extendedNames.map(normalizeCountyName));
-
-    // Primary wins if a county appears in both lists.
-    primarySet.forEach((name) => extendedSet.delete(name));
-
-    const { geojson, missingPrimary, missingExtended } = rebuildFromCountySets(primarySet, extendedSet);
-    localStorage.setItem(LOCAL_DATA_KEY, JSON.stringify(geojson));
-    setServiceAreaData(geojson, "Browser CSV import preview", true);
-    clearImportFileInputs();
-    closeModals();
-
-    const missing = [...missingPrimary, ...missingExtended];
-    if (missing.length) {
-      setDataStatus(`Preview updated, but ${missing.length} counties were not found in the current county geometry catalog. Export/replace the CSVs after review.`, "warn");
-    } else {
-      setDataStatus("CSV preview updated. To publish for the team, replace the Primary and Extended CSV files in GitHub and push.", "good");
-    }
-  } catch (error) {
-    setDataStatus(`CSV import failed: ${error.message}`, "bad");
-  }
-}
-
-async function buildPublishedServiceAreas(baseGeoJson) {
-  try {
-    const [primaryResponse, extendedResponse] = await Promise.all([
-      fetch(DEFAULT_PRIMARY_CSV_URL, { cache: "no-store" }),
-      fetch(DEFAULT_EXTENDED_CSV_URL, { cache: "no-store" })
-    ]);
-
-    if (!primaryResponse.ok || !extendedResponse.ok) return baseGeoJson;
-
-    const [primaryText, extendedText] = await Promise.all([primaryResponse.text(), extendedResponse.text()]);
-    const primaryNames = parseCountyNamesFromCsv(primaryText);
-    const extendedNames = parseCountyNamesFromCsv(extendedText);
-    if (!primaryNames.length && !extendedNames.length) return baseGeoJson;
-
-    const primarySet = new Set(primaryNames.map(normalizeCountyName));
-    const extendedSet = new Set(extendedNames.map(normalizeCountyName));
-    primarySet.forEach((name) => extendedSet.delete(name));
-
-    const { geojson } = rebuildFromCountySets(primarySet, extendedSet);
-    return geojson.features.length ? geojson : baseGeoJson;
-  } catch (_error) {
-    return baseGeoJson;
-  }
-}
-
-function buildFeatureLibrary(geojson) {
-  const library = new Map();
-  geojson.features.forEach((feature) => {
-    library.set(normalizeCountyName(feature.properties.name), cloneJson(feature));
-  });
-  return library;
-}
-
-function loadSavedServiceAreas() {
-  try {
-    const saved = localStorage.getItem(LOCAL_DATA_KEY);
-    if (!saved) return null;
-    const parsed = JSON.parse(saved);
-    validateServiceAreaGeoJson(parsed);
-    return parsed;
-  } catch (_error) {
-    localStorage.removeItem(LOCAL_DATA_KEY);
-    return null;
-  }
-}
-
-function setServiceAreaData(geojson, sourceLabel, shouldClearLookup) {
-  validateServiceAreaGeoJson(geojson);
-  serviceAreas = cloneJson(geojson);
-  rebuildGeometryLibrary(serviceAreas);
-
-  map.data.forEach((feature) => map.data.remove(feature));
-  map.data.addGeoJson(serviceAreas);
-  map.data.setStyle(styleFeature);
-  coverageBounds = buildGeoJsonBounds(serviceAreas);
-
-  if (shouldClearLookup) clearLookup(true);
-  else fitCoverageBounds();
-
-  updateDataSummary(sourceLabel);
-}
-
-function validateServiceAreaGeoJson(geojson) {
-  if (!geojson || geojson.type !== "FeatureCollection" || !Array.isArray(geojson.features)) {
-    throw new Error("File must be a GeoJSON FeatureCollection.");
-  }
-
-  const badFeature = geojson.features.find((feature) => !feature.geometry || !feature.properties?.name || !feature.properties?.service_area);
-  if (badFeature) {
-    throw new Error("Each feature needs geometry, properties.name, and properties.service_area.");
-  }
-}
-
-function rebuildGeometryLibrary(geojson) {
-  geometryLibrary = new Map();
-  geojson.features.forEach((feature) => {
-    geometryLibrary.set(normalizeCountyName(feature.properties.name), cloneJson(feature));
-  });
-}
-
-function rebuildFromCountySets(primarySet, extendedSet) {
-  const features = [];
-  const missingPrimary = [];
-  const missingExtended = [];
-
-  const sourceLibrary = countyCatalogLibrary.size ? countyCatalogLibrary : geometryLibrary;
-
-  primarySet.forEach((name) => {
-    const feature = sourceLibrary.get(name);
-    if (!feature) { missingPrimary.push(name); return; }
-    const copy = cloneJson(feature);
-    copy.properties.service_area = "Primary Service Area";
-    copy.properties.priority = 1;
-    features.push(copy);
-  });
-
-  extendedSet.forEach((name) => {
-    const feature = sourceLibrary.get(name);
-    if (!feature) { missingExtended.push(name); return; }
-    const copy = cloneJson(feature);
-    copy.properties.service_area = "Extended Service Area";
-    copy.properties.priority = 2;
-    features.push(copy);
-  });
-
-  return { geojson: { type: "FeatureCollection", features }, missingPrimary, missingExtended };
-}
-
-function getCurrentCoverageSets() {
-  const primary = new Set();
-  const extended = new Set();
-  serviceAreas.features.forEach((feature) => {
-    const key = normalizeCountyName(feature.properties.name);
-    if (feature.properties.service_area === "Primary Service Area") primary.add(key);
-    if (feature.properties.service_area === "Extended Service Area") extended.add(key);
-  });
-  return { primary, extended };
-}
-
-function parseCountyNamesFromCsv(text) {
-  const rows = parseCsv(text.replace(/^\uFEFF/, ""));
-  if (!rows.length) return [];
-
-  const header = rows[0].map((value) => value.trim().toLowerCase());
-  const nameIndex = header.findIndex((value) => ["name", "county", "county name"].includes(value));
-  const startIndex = nameIndex >= 0 ? 1 : 0;
-  const columnIndex = nameIndex >= 0 ? nameIndex : 0;
-
-  return rows.slice(startIndex)
-    .map((row) => (row[columnIndex] || "").trim())
-    .filter(Boolean);
-}
-
-function parseCsv(text) {
-  const rows = [];
-  let row = [];
-  let value = "";
-  let inQuotes = false;
-
-  for (let index = 0; index < text.length; index++) {
-    const char = text[index];
-    const next = text[index + 1];
-
-    if (char === '"') {
-      if (inQuotes && next === '"') { value += '"'; index++; }
-      else inQuotes = !inQuotes;
-      continue;
-    }
-
-    if (char === "," && !inQuotes) { row.push(value); value = ""; continue; }
-    if ((char === "\n" || char === "\r") && !inQuotes) {
-      if (char === "\r" && next === "\n") index++;
-      row.push(value);
-      if (row.some((cell) => cell.trim())) rows.push(row);
-      row = [];
-      value = "";
-      continue;
-    }
-
-    value += char;
-  }
-
-  row.push(value);
-  if (row.some((cell) => cell.trim())) rows.push(row);
-  return rows;
-}
-
-function exportCoverageCsv(layerName) {
-  const rows = serviceAreas.features
-    .filter((feature) => feature.properties.service_area === layerName)
-    .map((feature) => feature.properties.name)
-    .sort((a, b) => a.localeCompare(b));
-
-  const fileName = layerName === "Primary Service Area" ? "primary_service_area.csv" : "extended_service_area.csv";
-  const csv = ["Name", ...rows.map(csvEscape)].join("\n");
-  downloadTextFile(fileName, csv, "text/csv");
-}
-
-function updateDataSummary(sourceLabel) {
-  const primaryCount = serviceAreas.features.filter((feature) => feature.properties.service_area === "Primary Service Area").length;
-  const extendedCount = serviceAreas.features.filter((feature) => feature.properties.service_area === "Extended Service Area").length;
-  setDataStatus(`${sourceLabel}. ${primaryCount} Primary counties, ${extendedCount} Extended counties.`, "");
-}
-
-function setDataStatus(message, tone = "") {
-  const status = document.getElementById("data-status");
-  if (!status) return;
-  status.textContent = message;
-  status.className = `data-status ${tone}`.trim();
-}
-
-function downloadTextFile(fileName, content, mimeType) {
-  const blob = new Blob([content], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = fileName;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
-
-function normalizeCountyName(value) {
-  return String(value || "")
-    .replace(/^\uFEFF/, "")
-    .trim()
-    .replace(/\s+/g, " ")
-    .toLowerCase();
-}
-
-function csvEscape(value) {
-  const text = String(value || "");
-  return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
-}
-
-function cloneJson(value) {
-  return JSON.parse(JSON.stringify(value));
 }
 
 function styleFeature(feature) {
