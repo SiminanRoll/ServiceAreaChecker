@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Service Area Address Checker</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="shell">
+    <section class="panel">
+      <div class="brand-row">
+        <div class="logo-dot">A</div>
+        <div>
+          <h1>Service Area Checker</h1>
+          <p class="subhead">Enter an address to check Primary, Extended, or Out of Area status.</p>
+        </div>
+      </div>
+
+      <form id="address-form" class="search-card">
+        <label for="address-input">Address</label>
+        <div class="search-row">
+          <input id="address-input" type="text" autocomplete="street-address" placeholder="123 Main St, City, ST" required />
+          <button type="submit">Check</button>
+        </div>
+        <p class="hint">Tip: use a full street address for the cleanest result.</p>
+      </form>
+
+      <section id="result-card" class="result-card idle" aria-live="polite">
+        <div id="result-icon" class="result-icon">⌕</div>
+        <div>
+          <h2 id="result-title">Ready to check</h2>
+          <p id="result-detail">The map will drop a pin and compare the location against the service area counties.</p>
+          <p id="result-county" class="result-county"></p>
+        </div>
+      </section>
+
+      <section class="legend">
+        <div><span class="swatch primary"></span>Primary Service Area</div>
+        <div><span class="swatch extended"></span>Extended Service Area</div>
+        <div><span class="swatch hit"></span>Matched County Highlight</div>
+      </section>
+    </section>
+
+    <section class="map-wrap">
+      <div id="map"></div>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+  <script src="app.js"></script>
+  <!-- Replace YOUR_GOOGLE_MAPS_API_KEY with a browser-restricted Google Maps JavaScript API key. -->
+  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBVSNKe8p1Ac-OsbsOdqYfaAlWqB_nVRCI&callback=initMap&v=weekly" defer></script>
+</body>
+</html>
