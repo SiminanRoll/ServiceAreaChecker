@@ -8,6 +8,7 @@ let serviceAreas;
 let publishedServiceAreas;
 let coverageBounds;
 let geometryLibrary = new Map();
+let countyCatalogLibrary = new Map();
 let matchedCountyName = null;
 let matchedLayer = null;
 let suggestionPredictions = [];
@@ -17,6 +18,8 @@ let suggestionsTimer = null;
 const INITIAL_CENTER = { lat: 36.7, lng: -84.8 };
 const INITIAL_ZOOM = 5;
 const DEFAULT_DATA_URL = "service_areas.geojson";
+const DEFAULT_PRIMARY_CSV_URL = "primary_service_area.csv";
+const DEFAULT_EXTENDED_CSV_URL = "extended_service_area.csv";
 const LOCAL_DATA_KEY = "advantage_service_area_geojson_override_v1";
 
 const DARK_MAP_STYLE = [
@@ -56,9 +59,13 @@ window.initMap = async function initMap() {
   placesService = new google.maps.places.PlacesService(map);
   autocompleteService = new google.maps.places.AutocompleteService();
 
-  publishedServiceAreas = await fetch(DEFAULT_DATA_URL).then((response) => response.json());
+  const baseServiceAreas = await fetch(DEFAULT_DATA_URL).then((response) => response.json());
+  validateServiceAreaGeoJson(baseServiceAreas);
+  countyCatalogLibrary = buildFeatureLibrary(baseServiceAreas);
+  publishedServiceAreas = await buildPublishedServiceAreas(baseServiceAreas);
+
   const savedServiceAreas = loadSavedServiceAreas();
-  setServiceAreaData(savedServiceAreas || publishedServiceAreas, savedServiceAreas ? "Saved browser import" : "Published 2023 map data", false);
+  setServiceAreaData(savedServiceAreas || publishedServiceAreas, savedServiceAreas ? "Saved browser CSV import" : "Published CSV map data", false);
 
   map.data.addListener("click", (event) => {
     const name = event.feature.getProperty("name");
@@ -221,33 +228,128 @@ function selectSuggestion(prediction) {
 
 
 function wireDataControls() {
-  document.getElementById("export-geojson")?.addEventListener("click", exportGeoJson);
+  document.getElementById("open-import-modal")?.addEventListener("click", () => openModal("import-modal"));
+  document.getElementById("open-export-modal")?.addEventListener("click", () => openModal("export-modal"));
+  document.querySelectorAll("[data-close-modal]").forEach((button) => button.addEventListener("click", closeModals));
+  document.getElementById("modal-backdrop")?.addEventListener("click", closeModals);
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeModals();
+  });
+
   document.getElementById("export-primary-csv")?.addEventListener("click", () => exportCoverageCsv("Primary Service Area"));
   document.getElementById("export-extended-csv")?.addEventListener("click", () => exportCoverageCsv("Extended Service Area"));
+
   document.getElementById("restore-default-data")?.addEventListener("click", () => {
     localStorage.removeItem(LOCAL_DATA_KEY);
-    setServiceAreaData(publishedServiceAreas, "Published 2023 map data restored", true);
-    setDataStatus("Published data restored. Commit a replacement service_areas.geojson to GitHub if you want changes shared with everyone.", "good");
+    clearImportFileInputs();
+    setServiceAreaData(publishedServiceAreas, "Published CSV map data restored", true);
+    setDataStatus("Published CSV data restored for this browser.", "good");
+    closeModals();
   });
 
-  document.getElementById("import-geojson")?.addEventListener("change", async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    try {
-      const imported = JSON.parse(await file.text());
-      validateServiceAreaGeoJson(imported);
-      localStorage.setItem(LOCAL_DATA_KEY, JSON.stringify(imported));
-      setServiceAreaData(imported, `Imported GeoJSON: ${file.name}`, true);
-      setDataStatus(`Imported ${file.name}. This browser is updated now. Export GeoJSON and replace service_areas.geojson in GitHub to update the team site.`, "good");
-    } catch (error) {
-      setDataStatus(`Import failed: ${error.message}`, "bad");
-    } finally {
-      event.target.value = "";
+  document.getElementById("import-primary-csv")?.addEventListener("change", () => updateSelectedFileName("import-primary-csv", "primary-file-name"));
+  document.getElementById("import-extended-csv")?.addEventListener("change", () => updateSelectedFileName("import-extended-csv", "extended-file-name"));
+  document.getElementById("apply-csv-import")?.addEventListener("click", applyCsvImportFromModal);
+}
+
+function openModal(id) {
+  document.getElementById("modal-backdrop").hidden = false;
+  document.getElementById(id).hidden = false;
+}
+
+function closeModals() {
+  const backdrop = document.getElementById("modal-backdrop");
+  if (backdrop) backdrop.hidden = true;
+  document.querySelectorAll(".modal-sheet").forEach((modal) => { modal.hidden = true; });
+}
+
+function updateSelectedFileName(inputId, labelId) {
+  const file = document.getElementById(inputId)?.files?.[0];
+  const label = document.getElementById(labelId);
+  if (label) label.textContent = file ? file.name : "No file selected";
+}
+
+function clearImportFileInputs() {
+  const primaryInput = document.getElementById("import-primary-csv");
+  const extendedInput = document.getElementById("import-extended-csv");
+  if (primaryInput) primaryInput.value = "";
+  if (extendedInput) extendedInput.value = "";
+  updateSelectedFileName("import-primary-csv", "primary-file-name");
+  updateSelectedFileName("import-extended-csv", "extended-file-name");
+}
+
+async function applyCsvImportFromModal() {
+  const primaryFile = document.getElementById("import-primary-csv")?.files?.[0];
+  const extendedFile = document.getElementById("import-extended-csv")?.files?.[0];
+
+  if (!primaryFile && !extendedFile) {
+    setDataStatus("Choose at least one CSV to preview an import.", "warn");
+    return;
+  }
+
+  try {
+    const current = getCurrentCoverageSets();
+    const primaryNames = primaryFile ? parseCountyNamesFromCsv(await primaryFile.text()) : [...current.primary];
+    const extendedNames = extendedFile ? parseCountyNamesFromCsv(await extendedFile.text()) : [...current.extended];
+
+    if (primaryFile && !primaryNames.length) throw new Error("Primary CSV did not include any county names.");
+    if (extendedFile && !extendedNames.length) throw new Error("Extended CSV did not include any county names.");
+
+    const primarySet = new Set(primaryNames.map(normalizeCountyName));
+    const extendedSet = new Set(extendedNames.map(normalizeCountyName));
+
+    // Primary wins if a county appears in both lists.
+    primarySet.forEach((name) => extendedSet.delete(name));
+
+    const { geojson, missingPrimary, missingExtended } = rebuildFromCountySets(primarySet, extendedSet);
+    localStorage.setItem(LOCAL_DATA_KEY, JSON.stringify(geojson));
+    setServiceAreaData(geojson, "Browser CSV import preview", true);
+    clearImportFileInputs();
+    closeModals();
+
+    const missing = [...missingPrimary, ...missingExtended];
+    if (missing.length) {
+      setDataStatus(`Preview updated, but ${missing.length} counties were not found in the current county geometry catalog. Export/replace the CSVs after review.`, "warn");
+    } else {
+      setDataStatus("CSV preview updated. To publish for the team, replace the Primary and Extended CSV files in GitHub and push.", "good");
     }
-  });
+  } catch (error) {
+    setDataStatus(`CSV import failed: ${error.message}`, "bad");
+  }
+}
 
-  document.getElementById("import-primary-csv")?.addEventListener("change", (event) => importCoverageCsv(event, "Primary Service Area"));
-  document.getElementById("import-extended-csv")?.addEventListener("change", (event) => importCoverageCsv(event, "Extended Service Area"));
+async function buildPublishedServiceAreas(baseGeoJson) {
+  try {
+    const [primaryResponse, extendedResponse] = await Promise.all([
+      fetch(DEFAULT_PRIMARY_CSV_URL, { cache: "no-store" }),
+      fetch(DEFAULT_EXTENDED_CSV_URL, { cache: "no-store" })
+    ]);
+
+    if (!primaryResponse.ok || !extendedResponse.ok) return baseGeoJson;
+
+    const [primaryText, extendedText] = await Promise.all([primaryResponse.text(), extendedResponse.text()]);
+    const primaryNames = parseCountyNamesFromCsv(primaryText);
+    const extendedNames = parseCountyNamesFromCsv(extendedText);
+    if (!primaryNames.length && !extendedNames.length) return baseGeoJson;
+
+    const primarySet = new Set(primaryNames.map(normalizeCountyName));
+    const extendedSet = new Set(extendedNames.map(normalizeCountyName));
+    primarySet.forEach((name) => extendedSet.delete(name));
+
+    const { geojson } = rebuildFromCountySets(primarySet, extendedSet);
+    return geojson.features.length ? geojson : baseGeoJson;
+  } catch (_error) {
+    return baseGeoJson;
+  }
+}
+
+function buildFeatureLibrary(geojson) {
+  const library = new Map();
+  geojson.features.forEach((feature) => {
+    library.set(normalizeCountyName(feature.properties.name), cloneJson(feature));
+  });
+  return library;
 }
 
 function loadSavedServiceAreas() {
@@ -297,46 +399,15 @@ function rebuildGeometryLibrary(geojson) {
   });
 }
 
-async function importCoverageCsv(event, layerName) {
-  const file = event.target.files?.[0];
-  if (!file) return;
-
-  try {
-    const names = parseCountyNamesFromCsv(await file.text());
-    if (!names.length) throw new Error("No county names found. Expected a CSV with a Name column like `FL - Hillsborough County`.");
-
-    const current = getCurrentCoverageSets();
-    const incomingSet = new Set(names.map(normalizeCountyName));
-    const primarySet = layerName === "Primary Service Area" ? incomingSet : current.primary;
-    const extendedSet = layerName === "Extended Service Area" ? incomingSet : current.extended;
-
-    // Primary wins if a county appears in both lists.
-    primarySet.forEach((name) => extendedSet.delete(name));
-
-    const { geojson, missingPrimary, missingExtended } = rebuildFromCountySets(primarySet, extendedSet);
-    localStorage.setItem(LOCAL_DATA_KEY, JSON.stringify(geojson));
-    setServiceAreaData(geojson, `Imported ${layerName} CSV: ${file.name}`, true);
-
-    const missing = [...missingPrimary, ...missingExtended];
-    if (missing.length) {
-      setDataStatus(`Imported ${file.name}, but ${missing.length} counties were not already in this map geometry and could not be added. Export GeoJSON after review.`, "warn");
-    } else {
-      setDataStatus(`Imported ${file.name}. Export GeoJSON and replace service_areas.geojson in GitHub to update the team site.`, "good");
-    }
-  } catch (error) {
-    setDataStatus(`CSV import failed: ${error.message}`, "bad");
-  } finally {
-    event.target.value = "";
-  }
-}
-
 function rebuildFromCountySets(primarySet, extendedSet) {
   const features = [];
   const missingPrimary = [];
   const missingExtended = [];
 
+  const sourceLibrary = countyCatalogLibrary.size ? countyCatalogLibrary : geometryLibrary;
+
   primarySet.forEach((name) => {
-    const feature = geometryLibrary.get(name);
+    const feature = sourceLibrary.get(name);
     if (!feature) { missingPrimary.push(name); return; }
     const copy = cloneJson(feature);
     copy.properties.service_area = "Primary Service Area";
@@ -345,7 +416,7 @@ function rebuildFromCountySets(primarySet, extendedSet) {
   });
 
   extendedSet.forEach((name) => {
-    const feature = geometryLibrary.get(name);
+    const feature = sourceLibrary.get(name);
     if (!feature) { missingExtended.push(name); return; }
     const copy = cloneJson(feature);
     copy.properties.service_area = "Extended Service Area";
@@ -415,18 +486,13 @@ function parseCsv(text) {
   return rows;
 }
 
-function exportGeoJson() {
-  downloadTextFile("service_areas.geojson", JSON.stringify(serviceAreas, null, 2), "application/geo+json");
-  setDataStatus("Exported service_areas.geojson. Replace the file in GitHub to publish this map for the full team.", "good");
-}
-
 function exportCoverageCsv(layerName) {
   const rows = serviceAreas.features
     .filter((feature) => feature.properties.service_area === layerName)
     .map((feature) => feature.properties.name)
     .sort((a, b) => a.localeCompare(b));
 
-  const fileName = layerName === "Primary Service Area" ? "Primary Service Area.csv" : "Extended Service Area.csv";
+  const fileName = layerName === "Primary Service Area" ? "primary_service_area.csv" : "extended_service_area.csv";
   const csv = ["Name", ...rows.map(csvEscape)].join("\n");
   downloadTextFile(fileName, csv, "text/csv");
 }

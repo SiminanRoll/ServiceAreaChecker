@@ -1,46 +1,55 @@
 # Advantage Service Area Checker
 
-Static Google Maps tool for checking whether an entered address falls in the Primary Service Area, Extended Service Area, or outside the imported service-area county map.
+A static Google Maps web tool for checking whether an address is in the Advantage Technologies Primary Service Area, Extended Service Area, or outside the current service area.
 
-## Setup
+## Files
 
-1. Replace `YOUR_GOOGLE_MAPS_API_KEY` in `index.html` with a browser-restricted Google Maps API key.
-2. Enable these APIs on the Google Cloud project:
-   - Maps JavaScript API
-   - Places API
-   - Geocoding API
-3. Restrict the key to your live DigitalOcean domain, for example:
-   - `https://your-app.ondigitalocean.app/*`
-   - your custom domain if you add one later.
-4. Commit/push to GitHub. DigitalOcean App Platform should redeploy automatically.
+- `index.html` — page structure and Google Maps script include
+- `styles.css` — premium dark UI styling
+- `app.js` — address lookup, autocomplete, map rendering, and CSV import/export logic
+- `service_areas.geojson` — county geometry catalog used by the map
+- `primary_service_area.csv` — published Primary Service Area county list
+- `extended_service_area.csv` — published Extended Service Area county list
 
-## Updating coverage data
+## Google API key
 
-The app now includes a small **Map data** import/export area in the left panel.
+In `index.html`, replace:
 
-### Best publish workflow
+```html
+YOUR_GOOGLE_MAPS_API_KEY
+```
+
+with the browser-restricted Google Maps key.
+
+Required APIs:
+
+- Maps JavaScript API
+- Places API
+- Geocoding API
+
+## Updating the service area
+
+The visible update flow is CSV-only.
 
 1. Open the live tool.
-2. Expand **Map data**.
-3. Import an updated GeoJSON file, or import updated Primary/Extended CSV lists.
-4. Review the map and test a few addresses.
-5. Click **Export GeoJSON**.
-6. Replace the repo file named `service_areas.geojson` with the exported file.
-7. Commit/push to GitHub. DigitalOcean will publish the updated team map.
+2. Click **Import**.
+3. Choose a Primary CSV and/or Extended CSV.
+4. Click **Preview imported map**.
+5. Review the map and test addresses.
+6. Click **Export**.
+7. Download the current Primary and Extended CSVs.
+8. Replace `primary_service_area.csv` and `extended_service_area.csv` in GitHub.
+9. Commit and push. DigitalOcean App Platform should redeploy automatically.
 
-Important: importing data in the browser previews/saves it only for that browser. To update the shared team site, replace `service_areas.geojson` in GitHub.
-
-### CSV format
-
-The CSV importer expects a simple `Name` column, like:
+The CSV format should include a county-name column named `Name`, such as:
 
 ```csv
 Name
 FL - Hillsborough County
-FL - Pinellas County
-GA - Cobb County
+GA - Fulton County
+WI - Milwaukee County
 ```
 
-Primary CSV imports update the Primary layer. Extended CSV imports update the Extended layer.
+## Important note
 
-Note: CSV imports can only use county shapes that already exist in the map's current GeoJSON geometry library. If you need to add brand-new counties that were not in the current geometry, import a full GeoJSON file instead.
+The CSV import can only display counties that exist in the included `service_areas.geojson` geometry catalog. If a future update adds brand-new counties that are not in the current geometry catalog, the app will warn that those counties could not be found. In that case, the geometry catalog needs to be regenerated with those counties included.
