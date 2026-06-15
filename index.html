@@ -3,53 +3,88 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Service Area Address Checker</title>
+  <title>Advantage Service Area Checker</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <main class="shell">
-    <section class="panel">
-      <div class="brand-row">
-        <div class="logo-dot">A</div>
+  <div class="ambient ambient-one"></div>
+  <div class="ambient ambient-two"></div>
+  <div class="noise"></div>
+
+  <main class="app-shell">
+    <section class="control-panel" aria-label="Service area lookup controls">
+      <div class="brand-card">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 48 48" role="img">
+            <path class="mark-ring" d="M24 5.5c10.2 0 18.5 8.3 18.5 18.5S34.2 42.5 24 42.5 5.5 34.2 5.5 24 13.8 5.5 24 5.5Z"/>
+            <path class="mark-pin" d="M24 13.8c-4.7 0-8.5 3.7-8.5 8.3 0 6.4 8.5 15.1 8.5 15.1s8.5-8.7 8.5-15.1c0-4.6-3.8-8.3-8.5-8.3Zm0 11.6a3.4 3.4 0 1 1 0-6.8 3.4 3.4 0 0 1 0 6.8Z"/>
+            <path class="mark-pulse" d="M10 24h6.2m15.6 0H38M24 10v5.1m0 17.8V38"/>
+          </svg>
+        </div>
         <div>
+          <p class="eyebrow">Advantage Technologies</p>
           <h1>Service Area Checker</h1>
-          <p class="subhead">Enter an address to check Primary, Extended, or Out of Area status.</p>
+          <p class="subhead">Enter a prospect or client address and confirm whether it lands in Primary, Extended, or Out of Area coverage.</p>
         </div>
       </div>
 
-      <form id="address-form" class="search-card">
-        <label for="address-input">Address</label>
+      <form id="address-form" class="lookup-card">
+        <label for="address-input">Address lookup</label>
         <div class="search-row">
-          <input id="address-input" type="text" autocomplete="street-address" placeholder="123 Main St, City, ST" required />
-          <button type="submit">Check</button>
+          <div class="input-wrap">
+            <input id="address-input" type="text" autocomplete="off" placeholder="Try: 123 Main St, Tampa FL" required />
+            <div id="suggestions" class="suggestions" role="listbox" aria-label="Suggested address matches"></div>
+          </div>
+          <button id="check-button" type="submit">
+            <span>Check</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h12.2l-4.6-4.6L14 6l7 7-7 7-1.4-1.4 4.6-4.6H5z"/></svg>
+          </button>
         </div>
-        <p class="hint">Tip: use a full street address for the cleanest result.</p>
+        <p id="lookup-hint" class="hint">Start typing and choose a suggested match. Vague searches now show possible matches before checking.</p>
       </form>
 
       <section id="result-card" class="result-card idle" aria-live="polite">
         <div id="result-icon" class="result-icon">⌕</div>
-        <div>
-          <h2 id="result-title">Ready to check</h2>
-          <p id="result-detail">The map will drop a pin and compare the location against the service area counties.</p>
+        <div class="result-copy">
+          <p id="result-kicker" class="result-kicker">Ready</p>
+          <h2 id="result-title">Search an address</h2>
+          <p id="result-detail">The map will drop a pin and compare the location against the 2023 service-area counties.</p>
           <p id="result-county" class="result-county"></p>
         </div>
       </section>
 
-      <section class="legend">
-        <div><span class="swatch primary"></span>Primary Service Area</div>
-        <div><span class="swatch extended"></span>Extended Service Area</div>
-        <div><span class="swatch hit"></span>Matched County Highlight</div>
+      <section class="quick-actions" aria-label="Map controls">
+        <button id="reset-map" type="button">Reset coverage view</button>
+        <button id="clear-search" type="button">Clear lookup</button>
       </section>
+
+      <section class="legend" aria-label="Map legend">
+        <div><span class="swatch primary"></span><span>Primary Service Area</span></div>
+        <div><span class="swatch extended"></span><span>Extended Service Area</span></div>
+        <div><span class="swatch selected"></span><span>Matched County Highlight</span></div>
+      </section>
+
+      <p class="footnote">Coverage result is based on imported 2023 county service-area data.</p>
     </section>
 
-    <section class="map-wrap">
+    <section class="map-card" aria-label="Coverage map">
+      <div class="map-toolbar">
+        <div>
+          <p>Coverage map</p>
+          <strong>Primary + Extended Territories</strong>
+        </div>
+        <div class="status-pill"><span></span> Live lookup</div>
+      </div>
       <div id="map"></div>
     </section>
   </main>
 
   <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
   <script src="app.js"></script>
-  <!-- Replace YOUR_GOOGLE_MAPS_API_KEY with a browser-restricted Google Maps JavaScript API key. -->
-  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBVSNKe8p1Ac-OsbsOdqYfaAlWqB_nVRCI&callback=initMap&v=weekly" defer></script>
+  <!-- Replace YOUR_GOOGLE_MAPS_API_KEY with your browser-restricted Google Maps key. Places is needed for possible matches/autocomplete. -->
+  <script src="https://maps.googleapis.com/maps/api/js?key=YOUR_GOOGLE_MAPS_API_KEY&callback=initMap&libraries=places&v=weekly" defer></script>
 </body>
 </html>
